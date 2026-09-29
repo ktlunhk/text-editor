@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/action_new"
+        android:title="@string/action_new"
+        android:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_open"
+        android:title="@string/action_open"
+        android:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_save"
+        android:title="@string/action_save"
+        android:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_save_as"
+        android:title="@string/action_save_as"
+        android:showAsAction="never" />
+    <item
+        android:id="@+id/action_close"
+        android:title="@string/action_close"
+        android:showAsAction="never" />
+    <item
+        android:id="@+id/action_find"
+        android:title="@string/action_find"
+        android:showAsAction="never" />
+    <item
+        android:id="@+id/action_goto"
+        android:title="@string/action_goto"
+        android:showAsAction="never" />
+    <item
+        android:id="@+id/action_share"
+        android:title="@string/action_share"
+        android:showAsAction="never" />
+    <item
+        android:id="@+id/action_settings"
+        android:title="@string/action_settings"
+        android:showAsAction="never" />
+</menu>

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#1E1E1E">
+
+    <!-- Line numbers (left side) -->
+    <TextView
+        android:id="@+id/line_numbers"
+        android:layout_width="32dp"
+        android:layout_height="match_parent"
+        android:background="#252525"
+        android:textColor="#888888"
+        android:gravity="top|right"
+        android:paddingTop="8dp"
+        android:paddingRight="8dp"
+        android:paddingLeft="4dp"
+        android:textSize="13sp"
+        android:typeface="monospace"
+        android:scrollbars="none"
+        android:scrollHorizontally="true"
+        android:lineSpacingExtra="2dp"
+        android:text="1" />
+
+    <!-- Editor -->
+    <com.example.droidpadplus.SyncedEditText
+        android:id="@+id/editor"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:gravity="top|left"
+        android:inputType="textMultiLine|textNoSuggestions"
+        android:scrollbars="vertical|horizontal"
+        android:fadeScrollbars="false"
+        android:paddingTop="8dp"
+        android:paddingLeft="8dp"
+        android:paddingRight="8dp"
+        android:paddingBottom="8dp"
+        android:textSize="14sp"
+        android:typeface="monospace"
+        android:background="#1E1E1E"
+        android:textColor="#D4D4D4"
+        android:textColorHint="#666666"
+        android:textIsSelectable="true"
+        android:importantForAutofill="no"
+        android:lineSpacingExtra="2dp" />
+
+</LinearLayout>

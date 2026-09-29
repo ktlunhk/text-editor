@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="editor_bg_light">#FFFFFF</color>
+    <color name="editor_text_light">#000000</color>
+    <color name="editor_bg_dark">#1E1E1E</color>
+    <color name="editor_text_dark">#D4D4D4</color>
+    <color name="line_number_bg">#F0F0F0</color>
+    <color name="line_number_text">#888888</color>
+    <color name="tab_selected">#3F51B5</color>
+    <color name="tab_normal">#E0E0E0</color>
+</resources>
