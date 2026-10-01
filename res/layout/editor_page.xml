@@ -6,7 +6,7 @@
     android:background="#1E1E1E">
 
     <!-- Line numbers (left side) -->
-    <TextView
+    <com.example.droidpadplus.LineNumberView
         android:id="@+id/line_numbers"
         android:layout_width="32dp"
         android:layout_height="match_parent"
@@ -20,10 +20,9 @@
         android:typeface="monospace"
         android:scrollbars="none"
         android:scrollHorizontally="true"
-        android:lineSpacingExtra="2dp"
-        android:text="1" />
+        android:lineSpacingExtra="2dp" />
 
-    <!-- Editor -->
+    <!-- Editor (long lines are panned by SyncedEditText when word wrap is off) -->
     <com.example.droidpadplus.SyncedEditText
         android:id="@+id/editor"
         android:layout_width="0dp"
@@ -31,7 +30,7 @@
         android:layout_weight="1"
         android:gravity="top|left"
         android:inputType="textMultiLine|textNoSuggestions"
-        android:scrollbars="vertical|horizontal"
+        android:scrollbars="vertical"
         android:fadeScrollbars="false"
         android:paddingTop="8dp"
         android:paddingLeft="8dp"
