@@ -485,7 +485,7 @@ public class SyntaxHighlighter {
 	 * strips any spans it previously added, then re-applies fresh ones.
 	 */
 	/** Files up to this many chars are highlighted in full; bigger ones only near the viewport. */
-	public static final int FULL_HIGHLIGHT_LIMIT = 30000;
+	public static final int FULL_HIGHLIGHT_LIMIT = 12000;
 
 	public static void highlight(Editable editable, String langId, boolean darkTheme) {
 		highlightRange(editable, langId, darkTheme, 0, Integer.MAX_VALUE);
