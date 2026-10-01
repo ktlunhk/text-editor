@@ -23,7 +23,7 @@ public class EditorTab {
     public boolean modified;
     public View rootView;
     public EditText editor;
-    public TextView lineNumbers;
+    public LineNumberView lineNumbers;
     public String encoding;
     public String language;
     public boolean languageManual;
@@ -34,10 +34,26 @@ public class EditorTab {
     /** Saved cursor when switching tabs. */
     public int savedCursor;
 
-    private static final int UNDO_LIMIT = 80;
-    private ArrayList undoStack;
-    private ArrayList redoStack;
+    /** One text change: at 'start', 'removed' was replaced by 'inserted'. */
+    private static class Edit {
+        int start;
+        String removed;
+        String inserted;
+        long time;
+        Edit(int start, String removed, String inserted, long time) {
+            this.start = start;
+            this.removed = removed;
+            this.inserted = inserted;
+            this.time = time;
+        }
+    }
+
+    private static final int UNDO_LIMIT = 1000;
+    private ArrayList undoStack;   // of Edit
+    private ArrayList redoStack;   // of Edit
     private boolean isUndoRedo;
+    private int pendingStart;
+    private String pendingRemoved = "";
 
     public EditorTab(String title) {
         this.title = title;
@@ -51,8 +67,6 @@ public class EditorTab {
         this.undoStack = new ArrayList();
         this.redoStack = new ArrayList();
         this.isUndoRedo = false;
-        // Initial empty state
-        this.undoStack.add("");
     }
 
     public String getContent() {
@@ -72,65 +86,88 @@ public class EditorTab {
                 bulkLoad = false;
                 isUndoRedo = false;
             }
-            lastGutterText = null;
             undoStack.clear();
             redoStack.clear();
-            undoStack.add(content);
             updateLineNumbers();
         }
     }
 
-    public void onTextChanged(String content) {
-        if (isUndoRedo) {
+    /** Called from TextWatcher.beforeTextChanged: remember what is about to be replaced. */
+    public void beforeChange(CharSequence s, int start, int count) {
+        if (isUndoRedo || bulkLoad) {
             return;
         }
-        // Avoid pushing identical consecutive states
-        if (undoStack.size() > 0) {
-            String last = (String) undoStack.get(undoStack.size() - 1);
-            if (last.equals(content)) {
-                return;
-            }
+        pendingStart = start;
+        pendingRemoved = count > 0 ? s.subSequence(start, start + count).toString() : "";
+    }
+
+    /** Called from TextWatcher.onTextChanged: record only the changed part (not the whole text). */
+    public void afterChange(CharSequence s, int start, int count) {
+        if (isUndoRedo || bulkLoad) {
+            return;
         }
-        undoStack.add(content);
+        String inserted = count > 0 ? s.subSequence(start, start + count).toString() : "";
+        if (pendingRemoved.length() == 0 && inserted.length() == 0) {
+            return;
+        }
+        pushEdit(start, pendingRemoved, inserted);
+        pendingRemoved = "";
+    }
+
+    private void pushEdit(int start, String removed, String inserted) {
+        long now = System.currentTimeMillis();
+        redoStack.clear();
+        // One undo step per keystroke (no merging).
+        undoStack.add(new Edit(start, removed, inserted, now));
         while (undoStack.size() > UNDO_LIMIT) {
             undoStack.remove(0);
         }
-        redoStack.clear();
     }
 
     public void undo() {
-        if (undoStack.size() <= 1 || editor == null) {
+        if (undoStack.size() == 0 || editor == null) {
             return;
         }
-        String current = (String) undoStack.remove(undoStack.size() - 1);
-        redoStack.add(current);
-        String previous = (String) undoStack.get(undoStack.size() - 1);
-        isUndoRedo = true;
-        int sel = editor.getSelectionStart();
-        editor.setText(previous);
-        int newLen = previous.length();
-        if (sel < 0) sel = 0;
-        editor.setSelection(Math.min(sel, newLen));
-        isUndoRedo = false;
-        updateLineNumbers();
+        Edit e = (Edit) undoStack.remove(undoStack.size() - 1);
+        if (!applyEdit(e.start, e.inserted.length(), e.removed)) {
+            undoStack.clear();
+            redoStack.clear();
+            return;
+        }
+        redoStack.add(e);
         modified = true;
+        updateLineNumbers();
     }
 
     public void redo() {
         if (redoStack.size() == 0 || editor == null) {
             return;
         }
-        String next = (String) redoStack.remove(redoStack.size() - 1);
-        undoStack.add(next);
-        isUndoRedo = true;
-        int sel = editor.getSelectionStart();
-        editor.setText(next);
-        int newLen = next.length();
-        if (sel < 0) sel = 0;
-        editor.setSelection(Math.min(sel, newLen));
-        isUndoRedo = false;
-        updateLineNumbers();
+        Edit e = (Edit) redoStack.remove(redoStack.size() - 1);
+        if (!applyEdit(e.start, e.removed.length(), e.inserted)) {
+            undoStack.clear();
+            redoStack.clear();
+            return;
+        }
+        undoStack.add(e);
         modified = true;
+        updateLineNumbers();
+    }
+
+    /** Replaces [start, start+oldLen) with text, touching only that range; cursor goes after it. */
+    private boolean applyEdit(int start, int oldLen, String text) {
+        android.text.Editable ed = editor.getText();
+        if (start < 0 || start + oldLen > ed.length()) {
+            return false;
+        }
+        isUndoRedo = true;
+        try {
+            ed.replace(start, start + oldLen, text);
+            editor.setSelection(Math.min(ed.length(), start + text.length()));
+        } finally {
+            isUndoRedo = false;
+        }
+        return true;
     }
 
     /** True while setContent() is loading text; lets the TextWatcher skip per-change work. */
@@ -138,11 +175,10 @@ public class EditorTab {
     /** Char range currently carrying syntax-highlight spans (large files only highlight what is near the viewport). */
     public int hlStart = 0;
     public int hlEnd = 0;
-    private String lastGutterText = null;
-    private int lastCurStart = -1;
-    private int lastCurEnd = -1;
-    private int lastTotalLines = -1;
+    private int lastTotalLines = 1;
+    private int lastVer = -1;
 
+    /** Refreshes the gutter: recount lines only if the text changed, then repaint visible rows. */
     public void updateLineNumbers() {
         if (lineNumbers == null || editor == null) {
             return;
@@ -150,101 +186,21 @@ public class EditorTab {
         if (lineNumbers.getVisibility() != View.VISIBLE) {
             return;
         }
-
-        // Work on the Editable directly - no toString() copy of the whole document.
-        CharSequence text = editor.getText();
-        int textLen = text.length();
-        int pos = editor.getSelectionStart();
-        if (pos < 0) pos = 0;
-        if (pos > textLen) pos = textLen;
-
-        android.text.Layout layout = editor.getLayout();
-        StringBuilder sb = new StringBuilder();
-        int curStart = -1;
-        int curEnd = -1;
-        int totalLogicalLines = 1;
-
-        if (layout != null) {
-            // One gutter row per VISUAL row; wrapped continuation rows stay blank.
-            int visualLines = layout.getLineCount();
-            int curVisual = -1;
-            try {
-                curVisual = layout.getLineForOffset(Math.min(pos, layout.getText().length()));
-            } catch (Exception e) {
-                curVisual = -1;
-            }
-            int logical = 0;
-            int numStart = 0;
-            int numEnd = 0;
-            for (int v = 0; v < visualLines; v++) {
-                if (v > 0) sb.append('\n');
-                int lineStart = layout.getLineStart(v);
-                boolean first = (lineStart == 0)
-                        || (lineStart > 0 && lineStart <= textLen
-                        && text.charAt(lineStart - 1) == '\n');
-                if (first) {
-                    logical++;
-                    numStart = sb.length();
-                    sb.append(logical);
-                    numEnd = sb.length();
-                }
-                if (v == curVisual) {
-                    curStart = numStart;
-                    curEnd = numEnd;
-                }
-            }
-            if (logical < 1) logical = 1;
-            totalLogicalLines = logical;
-        } else {
-            // Layout not ready yet: logical lines only.
-            int cur = 1;
+        int ver = (editor instanceof SyncedEditText) ? ((SyncedEditText) editor).getTextVersion() : -1;
+        if (ver == -1 || ver != lastVer) {
+            CharSequence text = editor.getText();
+            int n = text.length();
             int lines = 1;
-            for (int i = 0; i < textLen; i++) {
-                if (text.charAt(i) == '\n') {
-                    lines++;
-                    if (i < pos) cur++;
-                }
+            for (int i = 0; i < n; i++) {
+                if (text.charAt(i) == '\n') lines++;
             }
-            for (int i = 1; i <= lines; i++) {
-                if (i > 1) sb.append('\n');
-                int st = sb.length();
-                sb.append(i);
-                if (i == cur) {
-                    curStart = st;
-                    curEnd = sb.length();
-                }
-            }
-            totalLogicalLines = lines;
+            lastTotalLines = lines;
+            lastVer = ver;
         }
-
-        String gutter = sb.toString();
-        // Nothing changed -> skip the expensive TextView relayout entirely.
-        if (lastGutterText != null && lastGutterText.equals(gutter)
-                && lastCurStart == curStart && lastCurEnd == curEnd) {
-            updateGutterWidth(totalLogicalLines);
-            syncLineNumberScroll();
-            return;
-        }
-        lastGutterText = gutter;
-        lastCurStart = curStart;
-        lastCurEnd = curEnd;
-        lastTotalLines = totalLogicalLines;
-
-        // Only 2 spans in total (base colour + current line) instead of one per line.
-        SpannableStringBuilder ssb = new SpannableStringBuilder(gutter);
-        if (gutter.length() > 0) {
-            ssb.setSpan(new ForegroundColorSpan(lineColorNormal),
-                    0, gutter.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-        if (curStart >= 0 && curEnd > curStart && curEnd <= gutter.length()) {
-            ssb.setSpan(new ForegroundColorSpan(lineColorCurrent),
-                    curStart, curEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            ssb.setSpan(new StyleSpan(Typeface.BOLD),
-                    curStart, curEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-        lineNumbers.setText(ssb);
-        updateGutterWidth(totalLogicalLines);
-        syncLineNumberScroll();
+        lineNumbers.attach(editor);
+        lineNumbers.setColors(lineColorNormal, lineColorCurrent);
+        updateGutterWidth(lastTotalLines);
+        lineNumbers.invalidate();
     }
 
     private static final int GUTTER_MIN_DIGITS = 2;
@@ -279,8 +235,8 @@ public class EditorTab {
     }
 
     public void syncLineNumberScroll() {
-        if (lineNumbers != null && editor != null) {
-            lineNumbers.scrollTo(0, editor.getScrollY());
+        if (lineNumbers != null) {
+            lineNumbers.invalidate();
         }
     }
 
