@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
 	private int currentTabIndex;
 	private int pendingCloseIndex = -1;
 	private boolean wordWrap;
+	private boolean showGuides = true;
 	private boolean showLineNumbers;
 	private boolean darkTheme;
 	private boolean keepScreenOn;
@@ -95,6 +96,7 @@ public class MainActivity extends Activity {
 	private Runnable scrollHighlighter;
 	private Runnable zoomFinisher;
 	private long lastZoomApply;
+	private float lastAppliedSize = 0f;
 	private Runnable lineNumberUpdater;
 	private Runnable highlightUpdater;
 
@@ -107,6 +109,7 @@ public class MainActivity extends Activity {
 
 		prefs = getSharedPreferences("droidpad_prefs", MODE_PRIVATE);
 		wordWrap = prefs.getBoolean("word_wrap", true);
+		showGuides = prefs.getBoolean("indent_guides", true);
 		showLineNumbers = prefs.getBoolean("line_numbers", true);
 		darkTheme = prefs.getBoolean("dark_theme", true);
 		keepScreenOn = prefs.getBoolean("keep_screen_on", false);
@@ -193,6 +196,7 @@ public class MainActivity extends Activity {
 					applyFontSize((EditorTab) tabs.get(i));
 				}
 				prefs.edit().putFloat("font_size", fontSize).apply();
+				lastAppliedSize = fontSize;
 				if (currentTabIndex >= 0 && currentTabIndex < tabs.size()) {
 					EditorTab tab = (EditorTab) tabs.get(currentTabIndex);
 					tab.updateLineNumbers();
@@ -501,14 +505,15 @@ public class MainActivity extends Activity {
 
 		tab.editor.addTextChangedListener(new TextWatcher() {
 			public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+				tab.beforeChange(s, start, count);
 			}
 			public void onTextChanged(CharSequence s, int start, int before, int count) {
+				tab.afterChange(s, start, count);
 			}
 			public void afterTextChanged(Editable s) {
 				if (tab.bulkLoad) {
 					return;
 				}
-				tab.onTextChanged(s.toString());
 				if (!tab.modified) {
 					tab.modified = true;
 					updateTabTitle(tab);
@@ -707,7 +712,10 @@ public class MainActivity extends Activity {
 						// ~12x/second to the tab being pinched; everything else waits for the
 						// gesture to settle.
 						long now = System.currentTimeMillis();
-						if (now - lastZoomApply >= 80) {
+						// Reflowing a big document is expensive: at most ~6x/second, and only
+						// for a visible change in size.
+						if (now - lastZoomApply >= 160 && Math.abs(fontSize - lastAppliedSize) >= 0.4f) {
+							lastAppliedSize = fontSize;
 							lastZoomApply = now;
 							applyFontSize(tab);
 						}
@@ -783,8 +791,12 @@ public class MainActivity extends Activity {
 			}
 		}
 
+		syncGuides(tab);
+
+		// Wrap off: SyncedEditText pans long lines with a horizontal drag.
 		if (wordWrap) {
 			tab.editor.setHorizontallyScrolling(false);
+			tab.editor.scrollTo(0, tab.editor.getScrollY());
 		} else {
 			tab.editor.setHorizontallyScrolling(true);
 		}
@@ -828,10 +840,18 @@ public class MainActivity extends Activity {
 		return new int[]{l.getLineStart(first), l.getLineEnd(last), ws, we};
 	}
 
+	private void syncGuides(EditorTab tab) {
+		if (tab != null && tab.editor instanceof SyncedEditText) {
+			((SyncedEditText) tab.editor).configureGuides(showGuides, "html".equals(tab.language), darkTheme,
+					tabSize);
+		}
+	}
+
 	private void applyHighlighting(EditorTab tab) {
 		if (tab == null || tab.editor == null) {
 			return;
 		}
+		syncGuides(tab);
 		android.text.Editable editable = tab.editor.getText();
 		if (editable.length() <= SyntaxHighlighter.FULL_HIGHLIGHT_LIMIT) {
 			SyntaxHighlighter.highlight(editable, tab.language, darkTheme);
@@ -1006,15 +1026,21 @@ public class MainActivity extends Activity {
 		int end = tab.editor.getSelectionEnd();
 		if (pos < 0)
 			pos = 0;
-		CharSequence content = tab.editor.getText();
 		int line = 1;
 		int col = 1;
-		for (int i = 0; i < pos && i < content.length(); i++) {
-			if (content.charAt(i) == '\n') {
-				line++;
-				col = 1;
-			} else {
-				col++;
+		if (tab.editor instanceof SyncedEditText) {
+			int[] lc = ((SyncedEditText) tab.editor).lineColAt(pos);
+			line = lc[0];
+			col = lc[1];
+		} else {
+			CharSequence content = tab.editor.getText();
+			for (int i = 0; i < pos && i < content.length(); i++) {
+				if (content.charAt(i) == '\n') {
+					line++;
+					col = 1;
+				} else {
+					col++;
+				}
 			}
 		}
 		String msg = "Ln " + line + ", Col " + col;
@@ -1991,7 +2017,6 @@ public class MainActivity extends Activity {
 				return;
 			}
 		}
-		tab.onTextChanged(tab.getContent());
 		tab.modified = true;
 		updateTabTitle(tab);
 		tab.updateLineNumbers();
@@ -2112,8 +2137,9 @@ public class MainActivity extends Activity {
 		final String themeText = "Theme: " + (darkTheme ? "Light" : "Dark");
 		final String keepText = "Keep Screen On: " + (keepScreenOn ? "On" : "Off");
 		final String softText = "Soft Tabs: " + (softTabs ? ("Spaces " + tabSize) : "Hard Tab");
+		final String guideText = "Indent Guides: " + (showGuides ? "On" : "Off");
 		final String[] items = new String[]{wrapText, lineText, themeText, keepText, softText, "Encoding   >",
-				"Language   >"};
+				"Language   >", guideText};
 
 		final int bg = darkTheme ? Color.parseColor("#2A2A2A") : Color.parseColor("#FFFFFF");
 		final int textCol = darkTheme ? Color.parseColor("#E0E0E0") : Color.parseColor("#1A1A1A");
@@ -2197,6 +2223,10 @@ public class MainActivity extends Activity {
 					prefs.edit().putBoolean("soft_tabs", softTabs).putInt("tab_size", tabSize).commit();
 					Toast.makeText(MainActivity.this, softTabs ? ("Soft Tabs: " + tabSize + " spaces") : "Hard Tabs",
 							Toast.LENGTH_SHORT).show();
+				} else if (position == 7) {
+					showGuides = !showGuides;
+					prefs.edit().putBoolean("indent_guides", showGuides).commit();
+					applySettingsToAllTabs();
 				}
 			}
 		});
@@ -3227,7 +3257,7 @@ public class MainActivity extends Activity {
 			int pos = tab.editor.getSelectionStart();
 			if (pos < 0)
 				pos = 0;
-			String s = ed.toString();
+			CharSequence s = ed; // no whole-document copy
 			if (s.length() == 0)
 				return;
 
@@ -3289,10 +3319,11 @@ public class MainActivity extends Activity {
 		}
 	}
 
-	private int findMatchingBracket(String s, int pos, char open, char close, boolean forward) {
+	private int findMatchingBracket(CharSequence s, int pos, char open, char close, boolean forward) {
 		int depth = 0;
+		final int LIMIT = 20000; // never scan the whole file for a bracket
 		if (forward) {
-			for (int i = pos; i < s.length(); i++) {
+			for (int i = pos; i < s.length() && i < pos + LIMIT; i++) {
 				char c = s.charAt(i);
 				if (c == open)
 					depth++;
@@ -3303,7 +3334,7 @@ public class MainActivity extends Activity {
 				}
 			}
 		} else {
-			for (int i = pos; i >= 0; i--) {
+			for (int i = pos; i >= 0 && i > pos - LIMIT; i--) {
 				char c = s.charAt(i);
 				if (c == close)
 					depth++;
