@@ -74,23 +74,28 @@ public class IndentGuides {
         return pos;
     }
 
-    /** Leading indentation in columns, or -1 for a blank line. */
-    private int leadingCols(CharSequence t, int ls, int le) {
+    /** Indent level of a line, or -1 if the line is blank. */
+    private int lineDepth(CharSequence t, int ls, int le) {
         int cols = 0;
+        boolean tab = false;
         for (int i = ls; i < le; i++) {
             char c = t.charAt(i);
             if (c == ' ') cols++;
-            else if (c == '\t') cols += indentSize;
-            else if (c == '\r') continue;
-            else return cols;
+            else if (c == '\t') {
+                cols += indentSize;
+                tab = true;
+            } else if (c == '\r') continue;
+            else {
+                int d = cols / indentSize;
+                // A few stray spaces (and no tab) in front of real code, e.g. one accidental space
+                // on a tab-indented file: count it as one level. Otherwise that single line reads
+                // as level 0 and collapses the whole block structure around it. "*" lines
+                // (Javadoc " * text") keep their natural level.
+                if (d == 0 && cols > 0 && !tab && c != '*') d = 1;
+                return d;
+            }
         }
         return -1;
-    }
-
-    /** Indent level of a line, or -1 if the line is blank. */
-    private int lineDepth(CharSequence t, int ls, int le) {
-        int cols = leadingCols(t, ls, le);
-        return cols < 0 ? -1 : cols / indentSize;
     }
 
     /** Blank lines inherit the smaller of the nearest non-blank levels above and below. */
