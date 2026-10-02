@@ -1374,8 +1374,9 @@ public class MainActivity extends Activity {
 		if (tab.uri == null || forceSaveAs) {
 			Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
 			intent.addCategory(Intent.CATEGORY_OPENABLE);
-			intent.setType("text/plain");
-			intent.putExtra(Intent.EXTRA_TITLE, tab.title.equals("Untitled") ? "untitled.txt" : tab.title);
+			String saveName = tab.title.equals("Untitled") ? "untitled.txt" : tab.title;
+			intent.setType(mimeForSaveName(saveName));
+			intent.putExtra(Intent.EXTRA_TITLE, saveName);
 			intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 			intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 			intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
@@ -1387,6 +1388,20 @@ public class MainActivity extends Activity {
 		} else {
 			writeToUri(tab, tab.uri);
 		}
+	}
+
+	/**
+	 * MIME type for the Save As dialog. With "text/plain" the system picker appends ".txt" to names
+	 * like "abc.java", so use the type of the real extension, or a generic type when it is unknown.
+	 */
+	private static String mimeForSaveName(String name) {
+		int dot = name.lastIndexOf('.');
+		if (dot <= 0 || dot == name.length() - 1) {
+			return "text/plain"; // no extension: let the picker add .txt
+		}
+		String ext = name.substring(dot + 1).toLowerCase();
+		String mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+		return mime != null ? mime : "application/octet-stream";
 	}
 
 	private void writeToUri(EditorTab tab, Uri uri) {
