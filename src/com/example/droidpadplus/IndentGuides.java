@@ -90,7 +90,7 @@ public class IndentGuides {
         int prev = -1;
         int prevStart = -1;   // the nearest non-blank line above (may itself be a fragment)
         int p = ls;
-        for (int n = 0; n < 200 && p > 0; n++) {
+        for (int n = 0; n < 60 && p > 0; n++) {
             int ps = lineStart(t, p - 1);
             int pd = rawDepth(t, ps, lineEnd(t, ps));
             if (pd >= 0) {
@@ -261,6 +261,22 @@ public class IndentGuides {
         blkLevel = -1;
 
         int ce = lineEnd(t, cl);
+        // The cursor sits on a flush-left fragment of a split word: it belongs to the code line
+        // above, so work out the block from that line (and the fragment stays inside it).
+        if (ce > cl && lineDepth(t, cl, ce) < 0 && rawDepth(t, cl, ce) == 0
+			&& fragmentStart(t, cl)) {
+            int pp = cl;
+            for (int n = 0; n < 60 && pp > 0; n++) {
+                int ps = lineStart(t, pp - 1);
+                int pe = lineEnd(t, ps);
+                if (lineDepth(t, ps, pe) >= 0) {
+                    cl = ps;
+                    ce = pe;
+                    break;
+                }
+                pp = ps;
+            }
+        }
         int d = lineDepth(t, cl, ce);
         boolean blank = d < 0;
         if (blank) d = blankDepth(t, cl, ce);
