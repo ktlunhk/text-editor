@@ -122,6 +122,25 @@ public class IndentGuides {
         return Math.min(prev, next);
     }
 
+    /** Start of the nearest non-blank line above (else below) a blank line, or -1. */
+    private int referenceLine(CharSequence t, int ls, int le) {
+        int len = t.length();
+        int p = ls;
+        for (int n = 0; n < 30 && p > 0; n++) {
+            int ps = lineStart(t, p - 1);
+            if (lineDepth(t, ps, lineEnd(t, ps)) >= 0) return ps;
+            p = ps;
+        }
+        int q = le;
+        for (int n = 0; n < 30 && q < len; n++) {
+            int ns = q + 1;
+            int ne = lineEnd(t, ns);
+            if (lineDepth(t, ns, ne) >= 0) return ns;
+            q = ne;
+        }
+        return -1;
+    }
+
     private void detectIndentSize(CharSequence t, int ver) {
         if (sizeVer == ver) return;
         sizeVer = ver;
@@ -189,13 +208,32 @@ public class IndentGuides {
             }
         }
 
+        int prevDepth = -1;
+        if (!blank) {
+            int p0 = cl;
+            for (int n = 0; n < 40 && p0 > 0; n++) {
+                int ps = lineStart(t, p0 - 1);
+                int pd = lineDepth(t, ps, lineEnd(t, ps));
+                if (pd >= 0) {
+                    prevDepth = pd;
+                    break;
+                }
+                p0 = ps;
+            }
+        }
+
         int level;
         int need;
         boolean opens = false;
+        boolean closes = false;
         if (!blank && nextDepth > d) {
             level = d;          // cursor is on a header line: highlight the block it opens
             need = d + 1;
             opens = true;
+        } else if (!blank && prevDepth > d) {
+            level = d;          // cursor is on a closing line (e.g. "}"): highlight the block it closes
+            need = d + 1;
+            closes = true;
         } else if (d >= 1) {
             level = d - 1;      // cursor is inside a block
             need = d;
@@ -218,18 +256,22 @@ public class IndentGuides {
             }
         }
         int be = len;
-        int p = ce;
-        int guard = 0;
-        while (p < len && guard < 3000) {
-            int ns = p + 1;
-            int ne = lineEnd(t, ns);
-            int nd = lineDepth(t, ns, ne);
-            if (nd >= 0 && nd < need) {
-                be = ns;
-                break;
+        if (closes) {
+            be = cl;            // the block ends just above the closing line
+        } else {
+            int p = ce;
+            int guard = 0;
+            while (p < len && guard < 3000) {
+                int ns = p + 1;
+                int ne = lineEnd(t, ns);
+                int nd = lineDepth(t, ns, ne);
+                if (nd >= 0 && nd < need) {
+                    be = ns;
+                    break;
+                }
+                p = ne;
+                guard++;
             }
-            p = ne;
-            guard++;
         }
         blkLevel = level;
         blkStart = bs;
@@ -424,6 +466,7 @@ public class IndentGuides {
 
         int curLs = -1;
         int depth = 0;
+        int refLs = 0;          // line whose characters define the x positions of the guides
         boolean tabIndent = false;
         for (int v = first; v <= last; v++) {
             int s = l.getLineStart(v);
@@ -433,16 +476,22 @@ public class IndentGuides {
                 curLs = ls;
                 int le = lineEnd(t, ls);
                 int d = lineDepth(t, ls, le);
-                if (d < 0) d = blankDepth(t, ls, le);
+                refLs = ls;
+                if (d < 0) {
+                    // blank line: it has no (or too few) indent characters of its own, so take
+                    // the tab/space style and x positions from the nearest non-blank line
+                    d = blankDepth(t, ls, le);
+                    refLs = referenceLine(t, ls, le);
+                }
                 depth = d;
-                tabIndent = ls < len && t.charAt(ls) == '\t';
+                tabIndent = refLs >= 0 && refLs < len && t.charAt(refLs) == '\t';
             }
             if (depth <= 0) continue;
             float top = padTop + l.getLineTop(v);
             float bottom = padTop + l.getLineTop(v + 1);
             for (int k = 0; k < depth; k++) {
                 float x = tabIndent
-                        ? padLeft + l.getPrimaryHorizontal(Math.min(len, ls + k))
+                        ? padLeft + l.getPrimaryHorizontal(Math.min(len, refLs + k))
                         : padLeft + k * indentSize * cw;
                 x -= nudge;
                 boolean act = !tagMode && blkLevel == k && ls >= blkStart && ls < blkEnd;
