@@ -16,7 +16,7 @@ public class IndentGuides {
 
     private static final int MAX_TAG_SCAN = 300000;
     private static final String[] VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
-            "link", "meta", "param", "source", "track", "wbr"};
+		"link", "meta", "param", "source", "track", "wbr"};
 
     private boolean enabled = true;
     private boolean tagMode = false;
@@ -48,7 +48,7 @@ public class IndentGuides {
     /** Returns true if anything changed (caller should repaint). */
     public boolean configure(boolean enabled, boolean tagMode, boolean dark, int defaultIndent) {
         boolean changed = this.enabled != enabled || this.tagMode != tagMode || this.dark != dark
-                || this.defaultIndent != defaultIndent;
+			|| this.defaultIndent != defaultIndent;
         this.enabled = enabled;
         this.tagMode = tagMode;
         this.dark = dark;
@@ -74,8 +74,75 @@ public class IndentGuides {
         return pos;
     }
 
-    /** Indent level of a line, or -1 if the line is blank. */
+    /**
+     * Indent level of a line, or -1 if the line is blank. A flush-left fragment (typically the
+     * tail of a word split by an accidental Enter) is treated like a blank line, so it inherits
+     * the surrounding level instead of cutting the block in two. A flush-left line counts as a
+     * fragment when the previous code line is indented and does not end a statement
+     * (";", "{" or "}"), or when it sits between two equally indented lines.
+     */
     private int lineDepth(CharSequence t, int ls, int le) {
+        int d = rawDepth(t, ls, le);
+        if (d != 0 || ls >= le) return d;
+        if (!fragmentStart(t, ls)) return d;
+
+        int len = t.length();
+        int prev = -1;
+        int prevStart = -1;   // the nearest non-blank line above (may itself be a fragment)
+        int p = ls;
+        for (int n = 0; n < 200 && p > 0; n++) {
+            int ps = lineStart(t, p - 1);
+            int pd = rawDepth(t, ps, lineEnd(t, ps));
+            if (pd >= 0) {
+                if (prevStart < 0) prevStart = ps;
+                // a word split more than once leaves several flush-left fragments in a row:
+                // look through them to the real indented line above
+                if (pd == 0 && fragmentStart(t, ps)) {
+                    p = ps;
+                    continue;
+                }
+                prev = pd;
+                break;
+            }
+            p = ps;
+        }
+        if (prev < 1) return d;
+
+        // last visible character of the nearest line above
+        int pe = lineEnd(t, prevStart);
+        while (pe > prevStart && (t.charAt(pe - 1) == '\r' || t.charAt(pe - 1) == ' '
+			   || t.charAt(pe - 1) == '\t')) pe--;
+        char last = pe > prevStart ? t.charAt(pe - 1) : ';';
+        if (last != ';' && last != '{' && last != '}') return -1;
+
+        // previous line ended a statement: only a fragment if it sits between equal levels
+        int next = -1;
+        int q = le;
+        for (int n = 0; n < 30 && q < len; n++) {
+            int ns = q + 1;
+            int ne = lineEnd(t, ns);
+            int nd = rawDepth(t, ns, ne);
+            if (nd >= 0) {
+                next = nd;
+                break;
+            }
+            q = ne;
+        }
+        int e = le;
+        while (e > ls && (t.charAt(e - 1) == '\r' || t.charAt(e - 1) == ' ')) e--;
+        boolean opener = e > ls && (t.charAt(e - 1) == '{' || t.charAt(e - 1) == ':');
+        return (next == prev && !opener) ? -1 : d;
+    }
+
+    /** True if the line starts flush-left with something that could be the tail of a split word. */
+    private static boolean fragmentStart(CharSequence t, int ls) {
+        if (ls >= t.length()) return false;
+        char c = t.charAt(ls);
+        return !(c == '}' || c == '*' || c == '@' || c == '#' || c == '/' || c == '<'
+			|| c == '\r' || c == '\t' || c == ' ' || c == '\n');
+    }
+
+    private int rawDepth(CharSequence t, int ls, int le) {
         int cols = 0;
         boolean tab = false;
         for (int i = ls; i < le; i++) {
@@ -476,7 +543,7 @@ public class IndentGuides {
         for (int v = first; v <= last; v++) {
             int s = l.getLineStart(v);
             int ls = (s <= 0 || s > len || t.charAt(s - 1) == '\n') ? Math.min(Math.max(s, 0), len)
-                    : lineStart(t, s);
+				: lineStart(t, s);
             if (ls != curLs) {
                 curLs = ls;
                 int le = lineEnd(t, ls);
@@ -496,8 +563,8 @@ public class IndentGuides {
             float bottom = padTop + l.getLineTop(v + 1);
             for (int k = 0; k < depth; k++) {
                 float x = tabIndent
-                        ? padLeft + l.getPrimaryHorizontal(Math.min(len, refLs + k))
-                        : padLeft + k * indentSize * cw;
+					? padLeft + l.getPrimaryHorizontal(Math.min(len, refLs + k))
+					: padLeft + k * indentSize * cw;
                 x -= nudge;
                 boolean act = !tagMode && blkLevel == k && ls >= blkStart && ls < blkEnd;
                 canvas.drawLine(x, top, x, bottom, act ? active : line);
@@ -512,7 +579,7 @@ public class IndentGuides {
                 if (closeRow > openRow) {
                     float x = padLeft + l.getPrimaryHorizontal(Math.min(len, p[0])) - nudge;
                     canvas.drawLine(x, padTop + l.getLineBottom(openRow), x, padTop + l.getLineTop(closeRow),
-                            active);
+									active);
                 }
                 fill.setColor(dark ? 0x334CAF50 : 0x332E7D32);
                 tagBox(canvas, l, p[0], p[3], padLeft, padTop, len);
@@ -533,3 +600,4 @@ public class IndentGuides {
         canvas.drawRect(x1, padTop + l.getLineTop(r), x2, padTop + l.getLineBottom(r), fill);
     }
 }
+
