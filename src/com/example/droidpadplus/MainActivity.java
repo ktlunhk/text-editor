@@ -747,9 +747,17 @@ public class MainActivity extends Activity {
 		if (tab == null || tab.editor == null) {
 			return;
 		}
-		tab.editor.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize);
+		// Gutter first: new font size, then resize its width to fit the digits. Doing it
+		// before the editor change means both are laid out together in one pass.
 		if (tab.lineNumbers != null) {
 			tab.lineNumbers.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize);
+			tab.updateLineNumbers();
+		}
+		// Keep the same line at the top of the screen while the text reflows.
+		if (tab.editor instanceof SyncedEditText) {
+			((SyncedEditText) tab.editor).setZoomTextSize(fontSize);
+		} else {
+			tab.editor.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize);
 		}
 	}
 
