@@ -5,7 +5,9 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.SystemClock;
+import android.text.InputFilter;
 import android.text.Layout;
+import android.text.Spanned;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.TypedValue;
@@ -43,16 +45,57 @@ public class SyncedEditText extends EditText {
     public SyncedEditText(Context context) {
         super(context);
         initThumb();
+        initEnterKeepsIndent();
     }
 
     public SyncedEditText(Context context, AttributeSet attrs) {
         super(context, attrs);
         initThumb();
+        initEnterKeepsIndent();
     }
 
     public SyncedEditText(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
         initThumb();
+        initEnterKeepsIndent();
+    }
+
+    /**
+     * Pressing Enter with the cursor in front of the first character of a line (after the
+     * indentation) would leave the indentation on the upper line and push the text to the new
+     * line with none. Keep the indentation with the text instead. Enter at the end of a line
+     * is untouched.
+     */
+    private void initEnterKeepsIndent() {
+        InputFilter enter = new InputFilter() {
+            public CharSequence filter(CharSequence source, int start, int end, Spanned dest,
+                                       int dstart, int dend) {
+                if (end - start != 1 || source.charAt(start) != '\n') return null;
+                int ls = dstart;
+                while (ls > 0 && dest.charAt(ls - 1) != '\n') ls--;
+                if (ls == dstart) return null; // cursor at column 1: the text keeps its own indent
+                for (int i = ls; i < dstart; i++) {
+                    char c = dest.charAt(i);
+                    if (c != ' ' && c != '\t') return null; // cursor is after real text
+                }
+                boolean hasText = false;
+                for (int i = dend; i < dest.length(); i++) {
+                    char c = dest.charAt(i);
+                    if (c == '\n') break;
+                    if (c != ' ' && c != '\t' && c != '\r') {
+                        hasText = true;
+                        break;
+                    }
+                }
+                if (!hasText) return null; // nothing to move to the new line
+                return "\n" + dest.subSequence(ls, dstart).toString();
+            }
+        };
+        InputFilter[] old = getFilters();
+        InputFilter[] all = new InputFilter[old.length + 1];
+        System.arraycopy(old, 0, all, 0, old.length);
+        all[old.length] = enter;
+        setFilters(all);
     }
 
     public void setEditorListener(Listener listener) {
