@@ -8,6 +8,7 @@ import android.os.SystemClock;
 import android.text.Layout;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.ViewConfiguration;
@@ -219,6 +220,65 @@ public class SyncedEditText extends EditText {
         }
     }
 
+    // ---- Zoom anchoring ----
+    // Changing the text size reflows the document. Without help, the scroll offset stays the
+    // same in pixels (wrong line) and TextView's pre-draw then scrolls to the cursor. So we
+    // remember which line is at the top, block the cursor auto-scroll, and put that line back.
+    private boolean zoomAnchoring;
+    private int anchorOff = -1;
+    private float anchorFrac;
+
+    /** Sets the text size (sp) and keeps the line at the top of the view where it was. */
+    public void setZoomTextSize(float sp) {
+        float wantPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sp,
+                getResources().getDisplayMetrics());
+        if (Math.abs(getTextSize() - wantPx) < 0.01f) return; // nothing will re-layout
+        Layout l = getLayout();
+        if (l != null && l.getLineCount() > 0) {
+            int sy = getScrollY();
+            int line = l.getLineForVertical(sy);
+            int top = l.getLineTop(line);
+            int h = l.getLineBottom(line) - top;
+            anchorOff = l.getLineStart(line);
+            float f = h > 0 ? (sy - top) / (float) h : 0f;
+            anchorFrac = f < 0f ? 0f : (f > 1f ? 1f : f);
+        } else {
+            anchorOff = -1;
+        }
+        stopFling();
+        zoomAnchoring = true;
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+    }
+
+    @Override
+    public boolean bringPointIntoView(int offset) {
+        // Don't let the cursor (maybe far away) steal the scroll position while zooming.
+        if (zoomAnchoring) return false;
+        return super.bringPointIntoView(offset);
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        if (anchorOff >= 0) restoreAnchor();
+    }
+
+    private void restoreAnchor() {
+        Layout l = getLayout();
+        if (l == null || l.getLineCount() == 0) return;
+        int off = Math.min(anchorOff, getText().length());
+        anchorOff = -1;
+        int line = l.getLineForOffset(off);
+        int top = l.getLineTop(line);
+        int h = l.getLineBottom(line) - top;
+        int y = top + (int) (anchorFrac * h);
+        int max = maxScrollY();
+        if (y > max) y = max;
+        if (y < 0) y = 0;
+        scrollTo(getScrollX(), y);
+        if (listener != null) listener.onEditorScrolled(getScrollY());
+    }
+
     // ---- Thumb fade ----
     private static final long THUMB_HOLD_MS = 900;
     private static final long THUMB_FADE_MS = 350;
@@ -287,6 +347,7 @@ public class SyncedEditText extends EditText {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        zoomAnchoring = false; // pre-draw (cursor auto-scroll) has already run
         // Drawn after the text: guides only sit in the blank indent area, and this way the
         // current-line background cannot hide them.
         guides.draw(canvas, this, textVersion, density);
