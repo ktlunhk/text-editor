@@ -907,11 +907,11 @@ public class MainActivity extends Activity {
 			root.setBackgroundColor(bgMain);
 		}
 
-		TextView appTitle = findViewById(R.id.app_title);
-		if (appTitle != null) {
-			appTitle.setTextColor(textPrimary);
-			appTitle.setBackgroundColor(bgBar);
-		}
+		//TextView appTitle = findViewById(R.id.app_title);
+		//if (appTitle != null) {
+			//appTitle.setTextColor(textPrimary);
+			//appTitle.setBackgroundColor(bgBar);
+		//}
 
 		int[] menuIds = new int[]{R.id.menu_file, R.id.menu_search, R.id.menu_utility, R.id.menu_options};
 		for (int i = 0; i < menuIds.length; i++) {
