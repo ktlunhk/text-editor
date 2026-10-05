@@ -229,6 +229,14 @@ public class MainActivity extends Activity {
 			Toast.makeText(this, "Init error: " + e.getMessage(), Toast.LENGTH_LONG).show();
 		}
 
+		// Runtime storage permission (needed to overwrite file:// and path-based files)
+		if (android.os.Build.VERSION.SDK_INT >= 23
+				&& checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+						!= android.content.pm.PackageManager.PERMISSION_GRANTED) {
+			requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+					android.Manifest.permission.READ_EXTERNAL_STORAGE}, 2001);
+		}
+
 		// Handle intent if opened with a file
 		Intent intent = getIntent();
 		if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
@@ -1352,6 +1360,10 @@ public class MainActivity extends Activity {
 
 			// Set the language BEFORE loading so text is highlighted exactly once.
 			tab.uri = uri;
+			java.io.File savedFile = uriToFile(uri);
+			if (savedFile != null && savedFile.getParentFile() != null) {
+				prefs.edit().putString("last_save_dir", savedFile.getParentFile().getAbsolutePath()).commit();
+			}
 			tab.title = fileNameFromUri(uri);
 			tab.language = SyntaxHighlighter.detectLanguage(tab.title);
 			tab.languageManual = false;
@@ -1366,27 +1378,458 @@ public class MainActivity extends Activity {
 		}
 	}
 
+	/** Document URI that makes the Save As picker open in the same folder as the given file. */
+	private Uri folderHintFor(Uri uri) {
+		if (uri == null) {
+			return null;
+		}
+		try {
+			if ("content".equals(uri.getScheme())) {
+				return uri; // the picker opens the folder containing this document
+			}
+			java.io.File f = uriToFile(uri);
+			if (f != null) {
+				String root = android.os.Environment.getExternalStorageDirectory().getAbsolutePath();
+				String path = f.getAbsolutePath();
+				if (path.startsWith(root + "/")) {
+					return android.provider.DocumentsContract.buildDocumentUri(
+							"com.android.externalstorage.documents",
+							"primary:" + path.substring(root.length() + 1));
+				}
+			}
+		} catch (Exception ignored) {
+		}
+		return null;
+	}
+
+	private boolean hasStoragePermission() {
+		if (android.os.Build.VERSION.SDK_INT < 23) {
+			return true;
+		}
+		return checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+				== android.content.pm.PackageManager.PERMISSION_GRANTED;
+	}
+
+	/** Last folder a file was saved to, or null if unknown / gone. */
+	private java.io.File lastSaveDir() {
+		String p = prefs.getString("last_save_dir", null);
+		if (p == null) {
+			return null;
+		}
+		java.io.File f = new java.io.File(p);
+		return (f.isDirectory() && f.canWrite()) ? f : null;
+	}
+
 	private void saveCurrent(boolean forceSaveAs) {
 		if (currentTabIndex < 0 || currentTabIndex >= tabs.size()) {
 			return;
 		}
 		EditorTab tab = (EditorTab) tabs.get(currentTabIndex);
-		if (tab.uri == null || forceSaveAs) {
-			Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-			intent.addCategory(Intent.CATEGORY_OPENABLE);
-			String saveName = tab.title.equals("Untitled") ? "untitled.txt" : tab.title;
-			intent.setType(mimeForSaveName(saveName));
-			intent.putExtra(Intent.EXTRA_TITLE, saveName);
-			intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-			intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-			intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-			try {
-				startActivityForResult(intent, REQUEST_SAVE_AS);
-			} catch (Exception e) {
-				Toast.makeText(this, "Cannot create file", Toast.LENGTH_SHORT).show();
-			}
-		} else {
+		if (tab.uri != null && !forceSaveAs) {
 			writeToUri(tab, tab.uri);
+			return;
+		}
+		if (!hasStoragePermission()) {
+			launchSavePicker(tab);
+			return;
+		}
+		java.io.File dir = tab.uri != null ? folderOf(tab.uri) : null;
+		if (dir == null) {
+			dir = lastSaveDir();
+		}
+		if (dir != null) {
+			showSaveAsDialog(tab, dir);
+		} else {
+			showFolderBrowser(tab, null);
+		}
+	}
+
+	/** Real folder of the file behind this URI, or null if unknown. */
+	private java.io.File folderOf(Uri uri) {
+		java.io.File f = uriToFile(uri);
+		if (f == null) {
+			return null;
+		}
+		java.io.File dir = f.getParentFile();
+		return (dir != null && dir.isDirectory()) ? dir : null;
+	}
+
+	private interface DialogAction {
+		/** Return true to close the dialog, false to keep it open. */
+		boolean run();
+	}
+
+	/** Dialog with the same panel, fonts, colours and rounded buttons as Find / Go to line. */
+	private Dialog showStyledDialog(String titleText, String messageText, final EditText input,
+			String[] labels, final DialogAction[] actions) {
+		return showStyledDialog(titleText, messageText, null, input, labels, actions);
+	}
+
+	private Dialog showStyledDialog(String titleText, String messageText, View body, final EditText input,
+			String[] labels, final DialogAction[] actions) {
+		final int dlgBg = darkTheme ? Color.parseColor("#2A2A2A") : Color.parseColor("#FFFFFF");
+		final int dlgText = darkTheme ? Color.WHITE : Color.parseColor("#1A1A1A");
+		final int dlgHint = Color.parseColor("#888888");
+		final int dlgField = darkTheme ? Color.parseColor("#1E1E1E") : Color.parseColor("#F0F0F0");
+		final float radius = 16f * getResources().getDisplayMetrics().density;
+
+		android.graphics.drawable.GradientDrawable panel = new android.graphics.drawable.GradientDrawable();
+		panel.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+		panel.setCornerRadius(radius);
+		panel.setColor(dlgBg);
+
+		LinearLayout layout = new LinearLayout(this);
+		layout.setOrientation(LinearLayout.VERTICAL);
+		layout.setPadding(32, 24, 32, 20);
+		layout.setBackgroundDrawable(panel);
+
+		TextView title = new TextView(this);
+		title.setText(titleText);
+		title.setTextColor(dlgText);
+		title.setTextSize(POPUP_HEADING_FONT_SP);
+		title.setPadding(0, 0, 0, 16);
+		layout.addView(title);
+
+		if (messageText != null) {
+			TextView message = new TextView(this);
+			message.setText(messageText);
+			message.setTextColor(dlgText);
+			message.setTextSize(POPUP_CONTENT_FONT_SP);
+			message.setPadding(0, 0, 0, 20);
+			layout.addView(message);
+		}
+
+		if (body != null) {
+			layout.addView(body);
+		}
+
+		if (input != null) {
+			input.setTextColor(dlgText);
+			input.setTextSize(POPUP_CONTENT_FONT_SP);
+			input.setHintTextColor(dlgHint);
+			input.setBackgroundColor(dlgField);
+			input.setPadding(16, 14, 16, 14);
+			input.setSingleLine(true);
+			LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+					ViewGroup.LayoutParams.WRAP_CONTENT);
+			ilp.bottomMargin = 20;
+			input.setLayoutParams(ilp);
+			layout.addView(input);
+		}
+
+		LinearLayout buttons = new LinearLayout(this);
+		buttons.setOrientation(LinearLayout.HORIZONTAL);
+		buttons.setGravity(android.view.Gravity.END);
+
+		LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+				ViewGroup.LayoutParams.WRAP_CONTENT);
+		btnLp.leftMargin = (int) (12 * getResources().getDisplayMetrics().density);
+		btnLp = popupButtonLayoutParams(btnLp);
+
+		final Dialog dialog = new Dialog(this);
+		dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+		dialog.setCancelable(true);
+
+		for (int i = 0; i < labels.length; i++) {
+			final DialogAction action = actions[i];
+			Button b = new Button(this);
+			b.setText(labels[i]);
+			styleGreyRoundButton(b);
+			b.setLayoutParams(btnLp);
+			b.setOnClickListener(new View.OnClickListener() {
+				public void onClick(View v) {
+					boolean close = true;
+					if (action != null) {
+						close = action.run();
+					}
+					if (close) {
+						dialog.dismiss();
+					}
+				}
+			});
+			buttons.addView(b);
+		}
+		layout.addView(buttons);
+
+		dialog.setContentView(layout);
+		if (dialog.getWindow() != null) {
+			android.graphics.drawable.GradientDrawable winBg = new android.graphics.drawable.GradientDrawable();
+			winBg.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+			winBg.setCornerRadius(radius);
+			winBg.setColor(dlgBg);
+			dialog.getWindow().setBackgroundDrawable(winBg);
+			android.view.WindowManager.LayoutParams wlp = dialog.getWindow().getAttributes();
+			wlp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.88f);
+			dialog.getWindow().setAttributes(wlp);
+			if (input != null) {
+				dialog.getWindow().setSoftInputMode(
+						android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+			}
+		}
+		dialog.show();
+		makeDialogDraggableDialog(dialog, title);
+		if (input != null) {
+			input.requestFocus();
+			input.selectAll();
+		}
+		return dialog;
+	}
+
+	/** Styled "File exists" confirmation. Cancel runs onCancel (may be null). */
+	private void confirmOverwrite(String name, final DialogAction onOverwrite, final DialogAction onCancel) {
+		showStyledDialog("File exists",
+				"\"" + name + "\" already exists in this folder. Overwrite it?", null,
+				new String[]{"Cancel", "Overwrite"},
+				new DialogAction[]{onCancel, onOverwrite});
+	}
+
+	/**
+	 * Save As in the same folder. The typed name is written directly, so an existing file with
+	 * that name is overwritten after confirmation (the system picker would create "name (1).txt").
+	 */
+	private void showSaveAsDialog(final EditorTab tab, final java.io.File dir) {
+		final EditText input = new EditText(this);
+		input.setText(tab.title.equals("Untitled") ? "untitled.txt" : tab.title);
+		showStyledDialog("Save As (" + dir.getName() + ")", null, input,
+				new String[]{"Cancel", "Browse...", "Save"},
+				new DialogAction[]{
+						null,
+						new DialogAction() {
+							public boolean run() {
+								showFolderBrowser(tab, dir);
+								return true;
+							}
+						},
+						new DialogAction() {
+							public boolean run() {
+								final String name = input.getText().toString().trim();
+								if (name.length() == 0 || name.indexOf('/') >= 0) {
+									Toast.makeText(MainActivity.this, "Invalid file name", Toast.LENGTH_SHORT).show();
+									return false;
+								}
+								final java.io.File target = new java.io.File(dir, name);
+								java.io.File current = uriToFile(tab.uri);
+								boolean sameAsCurrent = current != null
+										&& current.getAbsolutePath().equals(target.getAbsolutePath());
+								if (target.exists() && !sameAsCurrent) {
+									confirmOverwrite(name, new DialogAction() {
+										public boolean run() {
+											saveAsTarget(tab, target);
+											return true;
+										}
+									}, new DialogAction() {
+										public boolean run() {
+											showSaveAsDialog(tab, dir);
+											return true;
+										}
+									});
+								} else {
+									saveAsTarget(tab, target);
+								}
+								return true;
+							}
+						}
+				});
+	}
+
+	/** In-app folder chooser for shared storage (no system permission prompt). */
+	private void showFolderBrowser(final EditorTab tab, java.io.File start) {
+		final java.io.File root = android.os.Environment.getExternalStorageDirectory();
+		final java.io.File[] cur = new java.io.File[1];
+		cur[0] = (start != null && start.isDirectory()) ? start : root;
+		final int dlgText = darkTheme ? Color.WHITE : Color.parseColor("#1A1A1A");
+		final int dlgField = darkTheme ? Color.parseColor("#1E1E1E") : Color.parseColor("#F0F0F0");
+		final float dens = getResources().getDisplayMetrics().density;
+
+		LinearLayout body = new LinearLayout(this);
+		body.setOrientation(LinearLayout.VERTICAL);
+
+		final TextView pathView = new TextView(this);
+		pathView.setTextColor(dlgText);
+		pathView.setTextSize(POPUP_CONTENT_FONT_SP);
+		pathView.setPadding(0, 0, 0, 12);
+		body.addView(pathView);
+
+		final ListView list = new ListView(this);
+		list.setBackgroundColor(dlgField);
+		body.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+				(int) (280 * dens)));
+		LinearLayout.LayoutParams bodyGap = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+				ViewGroup.LayoutParams.WRAP_CONTENT);
+		bodyGap.bottomMargin = 20;
+		body.setLayoutParams(bodyGap);
+
+		final java.util.ArrayList names = new java.util.ArrayList();
+		final boolean[] hasUp = new boolean[1];
+		final android.widget.ArrayAdapter adapter = new android.widget.ArrayAdapter(this,
+				android.R.layout.simple_list_item_1, names) {
+			public View getView(int position, View convertView, ViewGroup parent) {
+				TextView tv = (TextView) super.getView(position, convertView, parent);
+				tv.setTextColor(dlgText);
+				tv.setTextSize(POPUP_CONTENT_FONT_SP);
+				return tv;
+			}
+		};
+		list.setAdapter(adapter);
+
+		final Runnable refresh = new Runnable() {
+			public void run() {
+				names.clear();
+				hasUp[0] = !cur[0].equals(root) && cur[0].getParentFile() != null;
+				if (hasUp[0]) {
+					names.add(".. (up)");
+				}
+				java.io.File[] kids = cur[0].listFiles();
+				java.util.ArrayList dirs = new java.util.ArrayList();
+				if (kids != null) {
+					for (int i = 0; i < kids.length; i++) {
+						if (kids[i].isDirectory() && !kids[i].getName().startsWith(".")) {
+							dirs.add(kids[i].getName());
+						}
+					}
+				}
+				java.util.Collections.sort(dirs, String.CASE_INSENSITIVE_ORDER);
+				names.addAll(dirs);
+				pathView.setText(cur[0].getAbsolutePath());
+				adapter.notifyDataSetChanged();
+				list.setSelection(0);
+			}
+		};
+		refresh.run();
+
+		list.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
+			public void onItemClick(android.widget.AdapterView p, View v, int position, long id) {
+				if (hasUp[0] && position == 0) {
+					cur[0] = cur[0].getParentFile();
+				} else {
+					cur[0] = new java.io.File(cur[0], (String) names.get(position));
+				}
+				refresh.run();
+			}
+		});
+
+		showStyledDialog("Choose folder", null, body, null,
+				new String[]{"Cancel", "Select"},
+				new DialogAction[]{
+						null,
+						new DialogAction() {
+							public boolean run() {
+								if (!cur[0].canWrite()) {
+									Toast.makeText(MainActivity.this, "This folder is not writable", Toast.LENGTH_SHORT).show();
+									return false;
+								}
+								showSaveAsDialog(tab, cur[0]);
+								return true;
+							}
+						}
+				});
+	}
+
+	private void saveAsTarget(EditorTab tab, java.io.File target) {
+		writeToUri(tab, Uri.fromFile(target));
+		if (pendingCloseIndex >= 0 && !tab.modified) {
+			int closeIndex = pendingCloseIndex;
+			pendingCloseIndex = -1;
+			doCloseTab(closeIndex);
+		}
+	}
+
+	/** Folder picker (never creates a file itself, so the system can't invent "name (1).txt"). */
+	private void launchSavePicker(EditorTab tab) {
+		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+		intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+				| Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+				| Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+		Uri startAt = folderHintFor(tab.uri);
+		if (startAt != null && android.os.Build.VERSION.SDK_INT >= 26) {
+			intent.putExtra("android.provider.extra.INITIAL_URI", startAt);
+		}
+		try {
+			startActivityForResult(intent, REQUEST_SAVE_AS);
+			Toast.makeText(this, "Choose the folder to save in", Toast.LENGTH_SHORT).show();
+		} catch (Exception e) {
+			Toast.makeText(this, "Cannot open folder picker", Toast.LENGTH_SHORT).show();
+		}
+	}
+
+	/** Finds a file with this exact name directly inside the picked folder, or null. */
+	private Uri findChildInTree(Uri treeUri, String name) {
+		android.database.Cursor c = null;
+		try {
+			String parentId = android.provider.DocumentsContract.getTreeDocumentId(treeUri);
+			Uri children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
+			c = getContentResolver().query(children, new String[]{
+					android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+					android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null);
+			while (c != null && c.moveToNext()) {
+				if (name.equals(c.getString(1))) {
+					return android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, c.getString(0));
+				}
+			}
+		} catch (Exception ignored) {
+		} finally {
+			if (c != null) {
+				c.close();
+			}
+		}
+		return null;
+	}
+
+	/** Name dialog for a folder chosen through the system folder picker. */
+	private void showSaveAsTreeDialog(final EditorTab tab, final Uri treeUri) {
+		final EditText input = new EditText(this);
+		input.setText(tab.title.equals("Untitled") ? "untitled.txt" : tab.title);
+		showStyledDialog("Save As", null, input,
+				new String[]{"Cancel", "Save"},
+				new DialogAction[]{
+						null,
+						new DialogAction() {
+							public boolean run() {
+								final String name = input.getText().toString().trim();
+								if (name.length() == 0 || name.indexOf('/') >= 0) {
+									Toast.makeText(MainActivity.this, "Invalid file name", Toast.LENGTH_SHORT).show();
+									return false;
+								}
+								final Uri existing = findChildInTree(treeUri, name);
+								if (existing != null) {
+									confirmOverwrite(name, new DialogAction() {
+										public boolean run() {
+											saveAsUri(tab, existing);
+											return true;
+										}
+									}, new DialogAction() {
+										public boolean run() {
+											showSaveAsTreeDialog(tab, treeUri);
+											return true;
+										}
+									});
+									return true;
+								}
+								try {
+									String parentId = android.provider.DocumentsContract.getTreeDocumentId(treeUri);
+									Uri parent = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, parentId);
+									Uri created = android.provider.DocumentsContract.createDocument(
+											getContentResolver(), parent, mimeForSaveName(name), name);
+									if (created == null) {
+										Toast.makeText(MainActivity.this, "Cannot create file here", Toast.LENGTH_LONG).show();
+									} else {
+										saveAsUri(tab, created);
+									}
+								} catch (Exception e) {
+									Toast.makeText(MainActivity.this, "Cannot create file: " + e.getMessage(), Toast.LENGTH_LONG).show();
+								}
+								return true;
+							}
+						}
+				});
+	}
+
+	private void saveAsUri(EditorTab tab, Uri uri) {
+		writeToUri(tab, uri);
+		if (pendingCloseIndex >= 0 && !tab.modified) {
+			int closeIndex = pendingCloseIndex;
+			pendingCloseIndex = -1;
+			doCloseTab(closeIndex);
 		}
 	}
 
@@ -1404,36 +1847,145 @@ public class MainActivity extends Activity {
 		return mime != null ? mime : "application/octet-stream";
 	}
 
-	private void writeToUri(EditorTab tab, Uri uri) {
+	/**
+	 * Maps a URI to the real file on disk, or null if it can't be found. Handles file://, document
+	 * providers, the "_data" column used by many file managers, and finally the open file
+	 * descriptor itself (/proc/self/fd), which reveals the real path for most file-backed providers.
+	 */
+	private java.io.File uriToFile(Uri uri) {
+		if (uri == null) {
+			return null;
+		}
 		try {
-			// Ensure we have write permission for this URI
-			try {
-				final int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
-				getContentResolver().takePersistableUriPermission(uri, takeFlags);
-			} catch (Exception ignored) {
-				// Some providers do not support persistable permissions
+			String scheme = uri.getScheme();
+			if ("file".equals(scheme)) {
+				return new java.io.File(uri.getPath());
+			}
+			if (!"content".equals(scheme)) {
+				return null;
+			}
+			String authority = uri.getAuthority();
+			java.io.File f = null;
+
+			// 1. External storage documents ("primary:Folder/file.txt")
+			if ("com.android.externalstorage.documents".equals(authority)) {
+				String docId = android.provider.DocumentsContract.getDocumentId(uri);
+				int colon = docId.indexOf(':');
+				if (colon > 0) {
+					String volume = docId.substring(0, colon);
+					String path = docId.substring(colon + 1);
+					if ("primary".equalsIgnoreCase(volume)) {
+						f = new java.io.File(android.os.Environment.getExternalStorageDirectory(), path);
+					} else {
+						f = new java.io.File("/storage/" + volume + "/" + path);
+					}
+				}
+				return f;
 			}
 
-			OutputStream os = null;
-			if (android.os.Build.VERSION.SDK_INT >= 26) {
+			// 2. Downloads documents with a raw path ("raw:/storage/emulated/0/Download/a.txt")
+			if ("com.android.providers.downloads.documents".equals(authority)) {
+				String docId = android.provider.DocumentsContract.getDocumentId(uri);
+				if (docId != null && docId.startsWith("raw:")) {
+					f = new java.io.File(docId.substring(4));
+					if (f.isFile()) {
+						return f;
+					}
+				}
+			}
+
+			// 3. "_data" column (MediaStore and many file-manager providers)
+			android.database.Cursor c = null;
+			try {
+				c = getContentResolver().query(uri, new String[]{"_data"}, null, null, null);
+				if (c != null && c.moveToFirst()) {
+					String p = c.getString(0);
+					if (p != null && p.startsWith("/")) {
+						f = new java.io.File(p);
+						if (f.isFile()) {
+							return f;
+						}
+					}
+				}
+			} catch (Exception ignored) {
+			} finally {
+				if (c != null) {
+					c.close();
+				}
+			}
+
+			// 4. The open file descriptor's real path
+			android.os.ParcelFileDescriptor pfd = null;
+			try {
+				pfd = getContentResolver().openFileDescriptor(uri, "r");
+				if (pfd != null) {
+					String p = new java.io.File("/proc/self/fd/" + pfd.getFd()).getCanonicalPath();
+					if (p.startsWith("/") && !p.startsWith("/proc") && !p.startsWith("/dev")) {
+						f = new java.io.File(p);
+						if (f.isFile()) {
+							return f;
+						}
+					}
+				}
+			} catch (Exception ignored) {
+			} finally {
+				if (pfd != null) {
+					try {
+						pfd.close();
+					} catch (Exception ignored) {
+					}
+				}
+			}
+		} catch (Exception ignored) {
+		}
+		return null;
+	}
+
+	/** Opens a truncating output stream for the SAME file, with no prompt. Returns null if impossible. */
+	private OutputStream openOverwriteStream(Uri uri) {
+		OutputStream os = null;
+		if (!"file".equals(uri.getScheme())) {
+			String[] modes = new String[]{"wt", "rwt", "w"};
+			for (int i = 0; i < modes.length && os == null; i++) {
 				try {
-					os = getContentResolver().openOutputStream(uri, "wt");
+					os = getContentResolver().openOutputStream(uri, modes[i]);
 				} catch (Exception e) {
 					os = null;
 				}
 			}
-			if (os == null) {
-				os = getContentResolver().openOutputStream(uri);
+			if (os != null) {
+				return os;
 			}
+		}
+		// Fallback: write straight to the real file path (needs storage permission).
+		java.io.File f = uriToFile(uri);
+		if (f != null) {
+			try {
+				return new java.io.FileOutputStream(f, false);
+			} catch (Exception e) {
+				return null;
+			}
+		}
+		return null;
+	}
+
+	private void writeToUri(EditorTab tab, Uri uri) {
+		try {
+			try {
+				getContentResolver().takePersistableUriPermission(uri,
+						Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+			} catch (Exception ignored) {
+				// Not a persistable URI (or not needed)
+			}
+
+			OutputStream os = openOverwriteStream(uri);
 			if (os == null) {
-				Toast.makeText(this, "Failed to save", Toast.LENGTH_SHORT).show();
+				// Only now, when the file truly cannot be overwritten, ask where to save.
+				Toast.makeText(this, "Cannot write to this file. Choose where to save.", Toast.LENGTH_LONG).show();
+				saveCurrent(true);
 				return;
 			}
 			String enc = tab.encoding != null ? tab.encoding : "UTF-8";
-			// Map display names to charset names
-			if ("Windows-1252".equals(enc)) {
-				enc = "Windows-1252";
-			}
 			BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(os, enc));
 			writer.write(tab.getContent());
 			writer.flush();
@@ -1447,11 +1999,6 @@ public class MainActivity extends Activity {
 			addRecentUri(uri);
 			hapticTick();
 			Toast.makeText(this, "Saved successfully", Toast.LENGTH_SHORT).show();
-		} catch (SecurityException se) {
-			// Permission lost - force Save As
-			Toast.makeText(this, "No write permission. Please use Save As...", Toast.LENGTH_LONG).show();
-			tab.uri = null;
-			saveCurrent(true);
 		} catch (Exception e) {
 			Toast.makeText(this, "Failed to save: " + e.getMessage(), Toast.LENGTH_LONG).show();
 		}
@@ -1493,21 +2040,15 @@ public class MainActivity extends Activity {
 			}
 			openUri(uri);
 		} else if (requestCode == REQUEST_SAVE_AS) {
-			Uri uri = data.getData();
-			if (uri == null)
+			Uri treeUri = data.getData();
+			if (treeUri == null)
 				return;
 			try {
-				getContentResolver().takePersistableUriPermission(uri, takeFlags);
+				getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
 			} catch (Exception ignored) {
 			}
 			if (currentTabIndex >= 0 && currentTabIndex < tabs.size()) {
-				EditorTab tab = (EditorTab) tabs.get(currentTabIndex);
-				writeToUri(tab, uri);
-				if (pendingCloseIndex >= 0 && !tab.modified) {
-					int closeIndex = pendingCloseIndex;
-					pendingCloseIndex = -1;
-					doCloseTab(closeIndex);
-				}
+				showSaveAsTreeDialog((EditorTab) tabs.get(currentTabIndex), treeUri);
 			}
 		}
 	}
