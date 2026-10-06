@@ -1269,6 +1269,267 @@ public class MainActivity extends Activity {
 	}
 
 	private void openFile() {
+		if (!hasStoragePermission()) {
+			openFileWithSystemPicker();
+			return;
+		}
+		java.io.File start = null;
+		String p = prefs.getString("last_open_dir", null);
+		if (p != null) {
+			start = new java.io.File(p);
+		}
+		if ((start == null || !start.isDirectory()) && currentTabIndex >= 0 && currentTabIndex < tabs.size()) {
+			start = folderOf(((EditorTab) tabs.get(currentTabIndex)).uri);
+		}
+		showOpenBrowser(start);
+	}
+
+	private static String formatFileSize(long bytes) {
+		if (bytes < 1024) {
+			return bytes + " B";
+		}
+		if (bytes < 1024 * 1024) {
+			return String.format("%.2f KB", bytes / 1024.0);
+		}
+		if (bytes < 1024L * 1024 * 1024) {
+			return String.format("%.2f MB", bytes / (1024.0 * 1024.0));
+		}
+		return String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+	}
+
+	/** In-app multi-select file chooser: folders to navigate, files with size and a checkbox. */
+	private void showOpenBrowser(java.io.File start) {
+		final java.io.File root = android.os.Environment.getExternalStorageDirectory();
+		final java.io.File[] cur = new java.io.File[1];
+		cur[0] = (start != null && start.isDirectory()) ? start : root;
+		final java.util.HashSet checked = new java.util.HashSet();
+		final int dlgText = darkTheme ? Color.WHITE : Color.parseColor("#1A1A1A");
+		final int dlgHint = Color.parseColor("#888888");
+		final int dlgField = darkTheme ? Color.parseColor("#1E1E1E") : Color.parseColor("#F0F0F0");
+		final float dens = getResources().getDisplayMetrics().density;
+
+		LinearLayout body = new LinearLayout(this);
+		body.setOrientation(LinearLayout.VERTICAL);
+
+		final TextView pathView = new TextView(this);
+		pathView.setTextColor(dlgText);
+		pathView.setTextSize(POPUP_CONTENT_FONT_SP);
+		pathView.setPadding(0, 0, 0, 8);
+		body.addView(pathView);
+
+		Button selectAll = new Button(this);
+		selectAll.setText("Select all");
+		styleGreyRoundButton(selectAll);
+		LinearLayout.LayoutParams saLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+				ViewGroup.LayoutParams.WRAP_CONTENT);
+		saLp.gravity = android.view.Gravity.END;
+		saLp.bottomMargin = 12;
+		selectAll.setLayoutParams(popupButtonLayoutParams(saLp));
+		body.addView(selectAll);
+
+		final ListView list = new ListView(this);
+		list.setBackgroundColor(dlgField);
+		body.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+				(int) (320 * dens)));
+		LinearLayout.LayoutParams bodyGap = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+				ViewGroup.LayoutParams.WRAP_CONTENT);
+		bodyGap.bottomMargin = 20;
+		body.setLayoutParams(bodyGap);
+
+		// Row model: null = "up" row, otherwise a folder or file
+		final java.util.ArrayList rows = new java.util.ArrayList();
+		final android.widget.BaseAdapter adapter = new android.widget.BaseAdapter() {
+			public int getCount() {
+				return rows.size();
+			}
+
+			public Object getItem(int position) {
+				return rows.get(position);
+			}
+
+			public long getItemId(int position) {
+				return position;
+			}
+
+			public View getView(int position, View convertView, ViewGroup parent) {
+				java.io.File f = (java.io.File) rows.get(position);
+				LinearLayout row = new LinearLayout(MainActivity.this);
+				row.setOrientation(LinearLayout.HORIZONTAL);
+				row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+				row.setPadding(24, 18, 24, 18);
+
+				LinearLayout texts = new LinearLayout(MainActivity.this);
+				texts.setOrientation(LinearLayout.VERTICAL);
+				TextView name = new TextView(MainActivity.this);
+				name.setTextColor(dlgText);
+				name.setTextSize(POPUP_CONTENT_FONT_SP);
+				texts.addView(name);
+				row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+				if (f == null) {
+					// Up row: an arrow icon instead of text
+					texts.removeAllViews();
+					View arrow = new View(MainActivity.this) {
+						protected void onDraw(android.graphics.Canvas c) {
+							android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+							p.setColor(dlgText);
+							p.setStyle(android.graphics.Paint.Style.STROKE);
+							p.setStrokeWidth(getWidth() / 11f);
+							p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+							p.setStrokeJoin(android.graphics.Paint.Join.ROUND);
+							float w = getWidth();
+							float h = getHeight();
+							c.drawLine(w * 0.5f, h * 0.88f, w * 0.5f, h * 0.12f, p);
+							android.graphics.Path head = new android.graphics.Path();
+							head.moveTo(w * 0.2f, h * 0.42f);
+							head.lineTo(w * 0.5f, h * 0.12f);
+							head.lineTo(w * 0.8f, h * 0.42f);
+							c.drawPath(head, p);
+						}
+					};
+					texts.addView(arrow, new LinearLayout.LayoutParams((int) (28 * dens), (int) (28 * dens)));
+				} else if (f.isDirectory()) {
+					name.setText(f.getName() + "/");
+				} else {
+					name.setText(f.getName());
+					TextView size = new TextView(MainActivity.this);
+					size.setTextColor(dlgHint);
+					size.setTextSize(POPUP_CONTENT_FONT_SP - 3);
+					size.setText(formatFileSize(f.length()));
+					texts.addView(size);
+					android.widget.CheckBox cb = new android.widget.CheckBox(MainActivity.this);
+					cb.setFocusable(false);
+					cb.setClickable(false);
+					cb.setChecked(checked.contains(f.getAbsolutePath()));
+					row.addView(cb);
+				}
+				return row;
+			}
+		};
+		list.setAdapter(adapter);
+
+		final Button[] openBtn = new Button[1];
+		final Runnable updateOpenLabel = new Runnable() {
+			public void run() {
+				if (openBtn[0] != null) {
+					openBtn[0].setText(checked.isEmpty() ? "Open" : "Open(" + checked.size() + ")");
+				}
+			}
+		};
+
+		final Runnable refresh = new Runnable() {
+			public void run() {
+				rows.clear();
+				if (!cur[0].equals(root) && cur[0].getParentFile() != null) {
+					rows.add(null);
+				}
+				java.io.File[] kids = cur[0].listFiles();
+				java.util.ArrayList dirs = new java.util.ArrayList();
+				java.util.ArrayList files = new java.util.ArrayList();
+				if (kids != null) {
+					for (int i = 0; i < kids.length; i++) {
+						if (kids[i].isDirectory()) {
+							if (!kids[i].getName().startsWith(".")) {
+								dirs.add(kids[i]);
+							}
+						} else {
+							files.add(kids[i]);
+						}
+					}
+				}
+				java.util.Comparator byName = new java.util.Comparator() {
+					public int compare(Object a, Object b) {
+						return ((java.io.File) a).getName().compareToIgnoreCase(((java.io.File) b).getName());
+					}
+				};
+				java.util.Collections.sort(dirs, byName);
+				java.util.Collections.sort(files, byName);
+				rows.addAll(dirs);
+				rows.addAll(files);
+				pathView.setText(cur[0].getAbsolutePath());
+				adapter.notifyDataSetChanged();
+				list.setSelection(0);
+			}
+		};
+		refresh.run();
+
+		list.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
+			public void onItemClick(android.widget.AdapterView p, View v, int position, long id) {
+				java.io.File f = (java.io.File) rows.get(position);
+				if (f == null) {
+					cur[0] = cur[0].getParentFile();
+					refresh.run();
+				} else if (f.isDirectory()) {
+					cur[0] = f;
+					refresh.run();
+				} else {
+					String path = f.getAbsolutePath();
+					if (checked.contains(path)) {
+						checked.remove(path);
+					} else {
+						checked.add(path);
+					}
+					adapter.notifyDataSetChanged();
+					updateOpenLabel.run();
+				}
+			}
+		});
+
+		selectAll.setOnClickListener(new View.OnClickListener() {
+			public void onClick(View v) {
+				boolean allChecked = true;
+				int fileCount = 0;
+				for (int i = 0; i < rows.size(); i++) {
+					java.io.File f = (java.io.File) rows.get(i);
+					if (f != null && !f.isDirectory()) {
+						fileCount++;
+						if (!checked.contains(f.getAbsolutePath())) {
+							allChecked = false;
+						}
+					}
+				}
+				if (fileCount == 0) {
+					return;
+				}
+				for (int i = 0; i < rows.size(); i++) {
+					java.io.File f = (java.io.File) rows.get(i);
+					if (f != null && !f.isDirectory()) {
+						if (allChecked) {
+							checked.remove(f.getAbsolutePath());
+						} else {
+							checked.add(f.getAbsolutePath());
+						}
+					}
+				}
+				adapter.notifyDataSetChanged();
+				updateOpenLabel.run();
+			}
+		});
+
+		showStyledDialog("Open files", null, body, null,
+				new String[]{"Cancel", "Open"},
+				new DialogAction[]{
+						null,
+						new DialogAction() {
+							public boolean run() {
+								if (checked.isEmpty()) {
+									Toast.makeText(MainActivity.this, "No file selected", Toast.LENGTH_SHORT).show();
+									return false;
+								}
+								prefs.edit().putString("last_open_dir", cur[0].getAbsolutePath()).commit();
+								java.util.ArrayList paths = new java.util.ArrayList(checked);
+								java.util.Collections.sort(paths);
+								for (int i = 0; i < paths.size(); i++) {
+									openUri(Uri.fromFile(new java.io.File((String) paths.get(i))));
+								}
+								return true;
+							}
+						}
+				});
+		openBtn[0] = lastDialogButtons[1];
+	}
+
+	private void openFileWithSystemPicker() {
 		Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
 		intent.setType("*/*");
 		intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -1454,6 +1715,9 @@ public class MainActivity extends Activity {
 		return (dir != null && dir.isDirectory()) ? dir : null;
 	}
 
+	/** Buttons of the most recently built styled dialog (same order as the labels). */
+	private Button[] lastDialogButtons;
+
 	private interface DialogAction {
 		/** Return true to close the dialog, false to keep it open. */
 		boolean run();
@@ -1530,9 +1794,11 @@ public class MainActivity extends Activity {
 		dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
 		dialog.setCancelable(true);
 
+		Button[] made = new Button[labels.length];
 		for (int i = 0; i < labels.length; i++) {
 			final DialogAction action = actions[i];
 			Button b = new Button(this);
+			made[i] = b;
 			b.setText(labels[i]);
 			styleGreyRoundButton(b);
 			b.setLayoutParams(btnLp);
@@ -1549,6 +1815,7 @@ public class MainActivity extends Activity {
 			});
 			buttons.addView(b);
 		}
+		lastDialogButtons = made;
 		layout.addView(buttons);
 
 		dialog.setContentView(layout);
@@ -3277,22 +3544,44 @@ public class MainActivity extends Activity {
 	}
 
 	private void shareAsFile() {
-		if (currentTabIndex < 0)
+		if (currentTabIndex < 0 || currentTabIndex >= tabs.size())
 			return;
 		EditorTab tab = (EditorTab) tabs.get(currentTabIndex);
-		if (tab.uri != null) {
-			Intent send = new Intent(Intent.ACTION_SEND);
-			send.setType("text/plain");
-			send.putExtra(Intent.EXTRA_STREAM, tab.uri);
-			send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-			try {
-				startActivity(Intent.createChooser(send, "Share file"));
-			} catch (Exception e) {
-				shareAsText();
+		try {
+			// Share the editor's current content (including unsaved edits) as a real file.
+			String name = tab.title.equals("Untitled") ? "untitled.txt" : tab.title;
+			name = name.replace('/', '_').replace((char) 92, '_');
+			java.io.File dir = new java.io.File(getCacheDir(), "share");
+			if (!dir.isDirectory()) {
+				dir.mkdirs();
 			}
-		} else {
-			Toast.makeText(this, "Save the file first to share as file", Toast.LENGTH_SHORT).show();
-			shareAsText();
+			java.io.File[] old = dir.listFiles();
+			if (old != null) {
+				for (int i = 0; i < old.length; i++) {
+					old[i].delete();
+				}
+			}
+			java.io.File out = new java.io.File(dir, name);
+			String enc = tab.encoding != null ? tab.encoding : "UTF-8";
+			BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+					new java.io.FileOutputStream(out), enc));
+			writer.write(tab.getContent());
+			writer.close();
+
+			Uri shareUri = Uri.parse("content://" + ShareProvider.AUTHORITY + "/" + Uri.encode(name));
+			String mime = mimeForSaveName(name);
+			if (mime.equals("application/octet-stream")) {
+				mime = "text/plain";
+			}
+			Intent send = new Intent(Intent.ACTION_SEND);
+			send.setType(mime);
+			send.putExtra(Intent.EXTRA_STREAM, shareUri);
+			send.putExtra(Intent.EXTRA_SUBJECT, name);
+			send.setClipData(android.content.ClipData.newRawUri(name, shareUri));
+			send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+			startActivity(Intent.createChooser(send, "Share file"));
+		} catch (Exception e) {
+			Toast.makeText(this, "Cannot share as file: " + e.getMessage(), Toast.LENGTH_LONG).show();
 		}
 	}
 
