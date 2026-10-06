@@ -1369,25 +1369,7 @@ public class MainActivity extends Activity {
 				if (f == null) {
 					// Up row: an arrow icon instead of text
 					texts.removeAllViews();
-					View arrow = new View(MainActivity.this) {
-						protected void onDraw(android.graphics.Canvas c) {
-							android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
-							p.setColor(dlgText);
-							p.setStyle(android.graphics.Paint.Style.STROKE);
-							p.setStrokeWidth(getWidth() / 11f);
-							p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
-							p.setStrokeJoin(android.graphics.Paint.Join.ROUND);
-							float w = getWidth();
-							float h = getHeight();
-							c.drawLine(w * 0.5f, h * 0.88f, w * 0.5f, h * 0.12f, p);
-							android.graphics.Path head = new android.graphics.Path();
-							head.moveTo(w * 0.2f, h * 0.42f);
-							head.lineTo(w * 0.5f, h * 0.12f);
-							head.lineTo(w * 0.8f, h * 0.42f);
-							c.drawPath(head, p);
-						}
-					};
-					texts.addView(arrow, new LinearLayout.LayoutParams((int) (28 * dens), (int) (28 * dens)));
+					texts.addView(createUpIcon(dlgText));
 				} else if (f.isDirectory()) {
 					name.setText(f.getName() + "/");
 				} else {
@@ -1899,6 +1881,31 @@ public class MainActivity extends Activity {
 				});
 	}
 
+	/** Up-arrow icon shared by the folder and file browsers (same size and colour rules). */
+	private View createUpIcon(final int color) {
+		View v = new View(this) {
+			protected void onDraw(android.graphics.Canvas c) {
+				android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+				p.setColor(color);
+				p.setStyle(android.graphics.Paint.Style.STROKE);
+				p.setStrokeWidth(getWidth() / 10f);
+				p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+				p.setStrokeJoin(android.graphics.Paint.Join.ROUND);
+				float w = getWidth();
+				float h = getHeight();
+				c.drawLine(w * 0.5f, h * 0.85f, w * 0.5f, h * 0.15f, p);
+				android.graphics.Path head = new android.graphics.Path();
+				head.moveTo(w * 0.22f, h * 0.42f);
+				head.lineTo(w * 0.5f, h * 0.15f);
+				head.lineTo(w * 0.78f, h * 0.42f);
+				c.drawPath(head, p);
+			}
+		};
+		int size = (int) (20 * getResources().getDisplayMetrics().density);
+		v.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+		return v;
+	}
+
 	/** In-app folder chooser for shared storage (no system permission prompt). */
 	private void showFolderBrowser(final EditorTab tab, java.io.File start) {
 		final java.io.File root = android.os.Environment.getExternalStorageDirectory();
@@ -1928,13 +1935,34 @@ public class MainActivity extends Activity {
 
 		final java.util.ArrayList names = new java.util.ArrayList();
 		final boolean[] hasUp = new boolean[1];
-		final android.widget.ArrayAdapter adapter = new android.widget.ArrayAdapter(this,
-				android.R.layout.simple_list_item_1, names) {
+		final android.widget.BaseAdapter adapter = new android.widget.BaseAdapter() {
+			public int getCount() {
+				return names.size();
+			}
+
+			public Object getItem(int position) {
+				return names.get(position);
+			}
+
+			public long getItemId(int position) {
+				return position;
+			}
+
 			public View getView(int position, View convertView, ViewGroup parent) {
-				TextView tv = (TextView) super.getView(position, convertView, parent);
-				tv.setTextColor(dlgText);
-				tv.setTextSize(POPUP_CONTENT_FONT_SP);
-				return tv;
+				LinearLayout row = new LinearLayout(MainActivity.this);
+				row.setOrientation(LinearLayout.HORIZONTAL);
+				row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+				row.setPadding(24, 18, 24, 18);
+				if (hasUp[0] && position == 0) {
+					row.addView(createUpIcon(dlgText));
+				} else {
+					TextView tv = new TextView(MainActivity.this);
+					tv.setTextColor(dlgText);
+					tv.setTextSize(POPUP_CONTENT_FONT_SP);
+					tv.setText(names.get(position) + "/");
+					row.addView(tv);
+				}
+				return row;
 			}
 		};
 		list.setAdapter(adapter);
