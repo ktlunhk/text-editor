@@ -414,7 +414,7 @@ public class MainActivity extends Activity {
 
 	private void showFileMenu(final View anchor) {
 		final String[] items = new String[]{"New", "Open...", "Recent files   >", "Save", "Save As...", "Save All",
-				"Share as text", "Share as file", "Print...", "Close Tab"};
+				"Share as text", "Share as file", "Print...", "Close Tab", "Close All Tabs"};
 		showDropdownMenu(anchor, items, new DialogInterface.OnClickListener() {
 			public void onClick(DialogInterface dialog, int which) {
 				if (which == 0)
@@ -439,6 +439,8 @@ public class MainActivity extends Activity {
 					if (currentTabIndex >= 0)
 						closeTab(currentTabIndex);
 				}
+				else if (which == 10)
+					closeAllTabs();
 			}
 		});
 	}
@@ -1077,6 +1079,82 @@ public class MainActivity extends Activity {
 			return;
 		}
 		doCloseTab(index);
+	}
+
+	/** Close every tab; asks once if some have unsaved changes. */
+	private void closeAllTabs() {
+		int modifiedCount = 0;
+		for (int i = 0; i < tabs.size(); i++) {
+			if (((EditorTab) tabs.get(i)).modified) {
+				modifiedCount++;
+			}
+		}
+		if (modifiedCount == 0) {
+			closeUnmodifiedTabs();
+			return;
+		}
+		showStyledDialog("Unsaved changes",
+				modifiedCount + (modifiedCount == 1 ? " tab has" : " tabs have") + " unsaved changes. Close all tabs?",
+				null,
+				new String[]{"Cancel", "Discard", "Save All"},
+				new DialogAction[]{
+						null,
+						new DialogAction() {
+							public boolean run() {
+								for (int i = 0; i < tabs.size(); i++) {
+									((EditorTab) tabs.get(i)).modified = false;
+								}
+								closeUnmodifiedTabs();
+								return true;
+							}
+						},
+						new DialogAction() {
+							public boolean run() {
+								int skipped = 0;
+								for (int i = 0; i < tabs.size(); i++) {
+									EditorTab t = (EditorTab) tabs.get(i);
+									if (t.modified && t.uri != null) {
+										writeToUri(t, t.uri);
+									}
+									if (t.modified) {
+										skipped++;
+									}
+								}
+								closeUnmodifiedTabs();
+								if (skipped > 0) {
+									Toast.makeText(MainActivity.this, skipped
+											+ (skipped == 1 ? " tab was" : " tabs were") + " left open (not saved)",
+											Toast.LENGTH_LONG).show();
+								}
+								return true;
+							}
+						}
+				});
+	}
+
+	/** Closes all tabs without unsaved changes; the last remaining tab is reset to Untitled. */
+	private void closeUnmodifiedTabs() {
+		for (int i = tabs.size() - 1; i >= 0; i--) {
+			EditorTab t = (EditorTab) tabs.get(i);
+			if (t.modified) {
+				continue;
+			}
+			if (tabs.size() > 1) {
+				tabs.remove(i);
+				tabContainer.removeViewAt(i);
+			} else {
+				currentTabIndex = 0;
+				doCloseTab(0);
+			}
+		}
+		if (currentTabIndex >= tabs.size()) {
+			currentTabIndex = tabs.size() - 1;
+		}
+		if (currentTabIndex < 0) {
+			currentTabIndex = 0;
+		}
+		switchToTab(currentTabIndex);
+		updateTabButtonStyles();
 	}
 
 	private void confirmClose(final int index) {
