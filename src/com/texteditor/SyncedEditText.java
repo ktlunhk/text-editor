@@ -2,6 +2,9 @@ package com.texteditor;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.SystemClock;
@@ -46,18 +49,97 @@ public class SyncedEditText extends EditText {
         super(context);
         initThumb();
         initEnterKeepsIndent();
+        initBlueCursor();
     }
 
     public SyncedEditText(Context context, AttributeSet attrs) {
         super(context, attrs);
         initThumb();
         initEnterKeepsIndent();
+        initBlueCursor();
     }
 
     public SyncedEditText(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
         initThumb();
         initEnterKeepsIndent();
+        initBlueCursor();
+    }
+
+    /** Blue, 2dp-wide insertion caret; supports old AIDE compile SDKs. */
+    private void initBlueCursor() {
+        try {
+            // Android 10+: public TextView API, invoked reflectively so SDK 28 compiles.
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                Method method = android.widget.TextView.class.getMethod(
+                    "setTextCursorDrawable", Drawable.class);
+                Drawable cursor = getResources().getDrawable(R.drawable.editor_cursor);
+                method.invoke(this, cursor);
+                return;
+            }
+            // Android 9 and earlier: TextView uses this drawable resource for the caret.
+            Field field = android.widget.TextView.class.getDeclaredField("mCursorDrawableRes");
+            field.setAccessible(true);
+            field.setInt(this, R.drawable.editor_cursor);
+        } catch (Exception ignored) {
+            // Preserve normal text editing if a device changes cursor internals.
+        }
+    }
+
+    // Draw the insertion caret above syntax highlighting and indent guides.
+    // A custom overlay avoids device-specific TextView cursor drawable behavior.
+    private final Paint blueCaretPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private boolean caretBlinkOn = true;
+    private final Runnable caretBlinkTask = new Runnable() {
+        @Override public void run() {
+            if (!isFocused() || !isShown()) return;
+            caretBlinkOn = !caretBlinkOn;
+            invalidate();
+            postDelayed(this, 500);
+        }
+    };
+
+    private void restartCaretBlink() {
+        removeCallbacks(caretBlinkTask);
+        caretBlinkOn = true;
+        invalidate();
+        if (isFocused() && isShown()) postDelayed(caretBlinkTask, 500);
+    }
+
+    @Override protected void onFocusChanged(boolean focused, int direction, android.graphics.Rect previouslyFocusedRect) {
+        super.onFocusChanged(focused, direction, previouslyFocusedRect);
+        restartCaretBlink();
+    }
+
+    @Override protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        restartCaretBlink();
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        removeCallbacks(caretBlinkTask);
+        super.onDetachedFromWindow();
+    }
+
+    @Override protected void onSelectionChanged(int selStart, int selEnd) {
+        super.onSelectionChanged(selStart, selEnd);
+        restartCaretBlink();
+    }
+
+    private void drawBlueCaret(Canvas canvas) {
+        if (!isFocused() || !caretBlinkOn || getSelectionStart() != getSelectionEnd()) return;
+        Layout layout = getLayout();
+        if (layout == null) return;
+        int offset = getSelectionStart();
+        if (offset < 0 || offset > length()) return;
+        int line = layout.getLineForOffset(offset);
+        float x = layout.getPrimaryHorizontal(offset) + getTotalPaddingLeft();
+        float top = layout.getLineTop(line) + getExtendedPaddingTop();
+        float bottom = layout.getLineBottom(line) + getExtendedPaddingTop();
+        float width = 2f * getResources().getDisplayMetrics().density;
+        blueCaretPaint.setColor(0xFF2196F3);
+        blueCaretPaint.setStyle(Paint.Style.FILL);
+        canvas.drawRect(x, top, x + width, bottom, blueCaretPaint);
     }
 
     /**
@@ -394,6 +476,7 @@ public class SyncedEditText extends EditText {
         // Drawn after the text: guides only sit in the blank indent area, and this way the
         // current-line background cannot hide them.
         guides.draw(canvas, this, textVersion, density);
+        drawBlueCaret(canvas);
         int max = maxScrollY();
         if (max <= 0) return;
         float vis = thumbVisibility();
